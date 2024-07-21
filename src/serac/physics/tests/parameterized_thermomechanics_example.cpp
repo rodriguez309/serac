@@ -89,8 +89,14 @@ TEST(Thermomechanics, ParameterizedMaterial)
   std::string mesh_tag{"mesh"};
   auto&       pmesh = serac::StateManager::setMesh(std::move(mesh), mesh_tag);
 
+  const NonlinearSolverOptions nonlinear_solver_options = {.nonlin_solver  = NonlinearSolver::Newton,
+                                                          .relative_tol   = 1.0e-6,
+                                                          .absolute_tol   = 1.0e-9,
+                                                          .max_iterations = 10,
+                                                          .print_level    = 1};
+
   SolidMechanics<p, dim, Parameters<H1<p>, H1<p>>> simulation(
-      solid_mechanics::default_nonlinear_options, solid_mechanics::direct_linear_options,
+      nonlinear_solver_options, solid_mechanics::direct_linear_options,
       solid_mechanics::default_quasistatic_options, GeometricNonlinearities::On, "thermomechanics_simulation", mesh_tag,
       {"theta", "alpha"});
 

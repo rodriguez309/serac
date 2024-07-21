@@ -386,7 +386,7 @@ public:
     predicted_displacement_ = 0.0;
 
     if (checkpoint_to_disk_) {
-      outputStateToDisk();
+      //outputStateToDisk();
     } else {
       checkpoint_states_.clear();
       auto state_names = stateNames();
@@ -1218,7 +1218,7 @@ public:
     nonlin_solver_->setOperator(*residual_with_bcs_);
 
     if (checkpoint_to_disk_) {
-      outputStateToDisk();
+      //outputStateToDisk();
     } else {
       checkpoint_states_.clear();
       auto state_names = stateNames();
@@ -1256,7 +1256,7 @@ public:
     }
 
     if (checkpoint_to_disk_) {
-      outputStateToDisk();
+      //outputStateToDisk();
     } else {
       for (const auto& state_name : stateNames()) {
         checkpoint_states_[state_name].push_back(state(state_name));
@@ -1339,15 +1339,13 @@ public:
                        "Maximum number of adjoint timesteps exceeded! The number of adjoint timesteps must equal the "
                        "number of forward timesteps");
 
-    double dt_np1 = cycle_ < static_cast<int>(timesteps().size()) ? getCheckpointedTimestep(cycle_) : 0.0;
+    double dt_np1 = getCheckpointedTimestep(cycle_);
     auto   previous_state_solution = getCheckpointedStates(cycle_);
-
+    displacement_ = previous_state_solution.at("displacement");
+    
     time_ -= dt_np1;
     cycle_--;
-
-    // Load the end of step disp
-    displacement_ = previous_state_solution.at("displacement");
-
+    
     const double dt_n = getCheckpointedTimestep(cycle_);
 
     if (is_quasistatic_) {
@@ -1372,7 +1370,6 @@ public:
                          "Only Newmark implemented for transient adjoint solid mechanics.");
 
       // Load the end of step velo, accel from the previous cycle
-
       velocity_     = previous_state_solution.at("velocity");
       acceleration_ = previous_state_solution.at("acceleration");
 
