@@ -70,7 +70,7 @@ struct IrvinMaterial {
 
 namespace serac {
 
-constexpr int dim = 2;
+constexpr int dim = 3;
 constexpr int p   = 1;
 
 const std::string mesh_tag       = "mesh";
@@ -145,7 +145,10 @@ createNonlinearSolidMechanicsSolver(const NonlinearSolverOptions& nonlinear_opts
       std::make_unique<ParameterizedSolidMechanics>(nonlinear_opts, solid_mechanics::direct_linear_options, dyn_opts,
         geoNonlinear, physics_prefix + std::to_string(iter++), mesh_tag, std::vector<::std::string> {"YoungsModulus", "PoissonsRatio"});
   solid->setMaterial(DependsOn<0, 1>{}, mat);
-  solid->setDisplacementBCs({1}, [](const mfem::Vector&, mfem::Vector& disp) { disp = boundary_disp; });
+  solid->setDisplacementBCs(/*boundaryID*/{1}, /*value*/[](const mfem::Vector&){ return 0.0; }, /*coordinate componenet*/0);
+  solid->setDisplacementBCs({2}, [](const mfem::Vector&){ return 0.0; }, 1);
+  solid->setDisplacementBCs({3}, [](const mfem::Vector&){ return 0.0; }, 2);
+  solid->setDisplacementBCs({5}, [](const mfem::Vector& /*x*/, double time) { return time; }, 2);
 
   FiniteElementState YoungsModulusState(solid->parameter(solid->parameterNames()[0]));
   YoungsModulusState = youngs_modulus;
@@ -272,7 +275,7 @@ struct SolidMechanicsSensitivityFixture : public ::testing::Test {
   {
     MPI_Barrier(MPI_COMM_WORLD);
     StateManager::initialize(dataStore, "solid_mechanics_solve");
-    std::string filename = std::string(SERAC_REPO_DIR) + "/data/meshes/star.mesh";
+    std::string filename = std::string(SERAC_REPO_DIR) + "/data/meshes/onehex.mesh";
     mesh                 = &StateManager::setMesh(mesh::refineAndDistribute(buildMeshFromFile(filename), 0), mesh_tag);
     mat.density          = 1.0;
   }
