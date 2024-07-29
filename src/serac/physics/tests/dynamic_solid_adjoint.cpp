@@ -18,6 +18,56 @@
 #include "serac/physics/state/state_manager.hpp"
 #include "serac/serac_config.hpp"
 
+namespace serac::solid_mechanics {
+
+/**
+ * @brief Neo-Hookean material model
+ */
+struct IrvinMaterial {
+  using State = Empty;  // this material has no internal variables
+
+  /**
+   * @brief stress calculation for a NeoHookean material model
+   *
+   * @tparam dim The spatial dimension of the mesh
+   * @tparam DispGradType Displacement gradient type
+   * @tparam YoungType Young's Modulus type
+   * @tparam PoissonType Poisson's Ratio type
+   * @param du_dX Displacement gradient with respect to the reference configuration (displacement_grad)
+   * @param E_tuple The Young's modulus 
+   * @param v_tuple The Poisson's modulus
+   * @return The calculated material response (Cauchy stress) for the material
+   */
+  template <int dim, typename DispGradType, typename YoungsType, typename PoissonsType>
+  SERAC_HOST_DEVICE auto operator()(State& /*state*/, const ::serac::tensor<DispGradType, dim, dim>& du_dX, 
+                                    const PoissonsType& E_tuple, const YoungsType& v_tuple) const
+  {
+    using std::log1p;
+    constexpr auto I         = Identity<dim>();
+    auto           E         = get<0>(E_tuple);
+    auto           v         = get<0>(v_tuple);
+    auto           G         = E / (2.0 * (1.0 + v));
+    auto           lambda    = (E * v) / ((1.0 + v) * (1.0 - 2.0 * v));
+    // auto           B_minus_I = du_dX * transpose(du_dX) + transpose(du_dX) + du_dX;
+    // auto           J_minus_1 = detApIm1(du_dX);
+    // auto           J         = J_minus_1 + 1;
+    // return (lambda * log1p(J_minus_1) * I + G * B_minus_I) / J;
+    auto strain = sym(du_dX);
+    return 2 * G * strain + lambda * tr(strain) * I;
+  }
+
+  /**
+   * @brief The number of parameters in the model
+   *
+   * @return The number of parameters in the model
+   */
+  static constexpr int numParameters() { return 2; }
+
+  double density {1.0};  ///< mass density
+};
+
+} // namespace serac
+
 namespace serac {
 
 constexpr int dim = 2;
@@ -26,8 +76,8 @@ constexpr int p   = 1;
 const std::string mesh_tag       = "mesh";
 const std::string physics_prefix = "solid";
 
-using SolidMaterial = solid_mechanics::NeoHookean;
-auto geoNonlinear   = GeometricNonlinearities::On;
+using SolidMaterial = solid_mechanics::IrvinMaterial;
+auto geoNonlinear   = GeometricNonlinearities::Off; // BT: Changed this for the linear elastic test. Remember to change it when we try with Neohookean
 
 struct TimeSteppingInfo {
   TimeSteppingInfo() : dts({0.0, 0.2, 0.4, 0.24, 0.12, 0.0}) {}
@@ -36,6 +86,11 @@ struct TimeSteppingInfo {
 
   mfem::Vector dts;
 };
+
+constexpr double youngs_modulus = 2.5;
+constexpr double poisson_ratio = 0.25;
+using ParamSpace = L2<0>;
+using ParameterizedSolidMechanics = SolidMechanics<p, dim, Parameters<ParamSpace, ParamSpace>>;
 
 constexpr double disp_target   = -0.34;
 constexpr double boundary_disp = 0.013;
@@ -59,7 +114,7 @@ void computeStepAdjointLoad(const FiniteElementState& displacement, FiniteElemen
   d_qoi_d_displacement *= dt;
 }
 
-void applyInitialAndBoundaryConditions(SolidMechanics<p, dim>& solid_solver)
+void applyInitialAndBoundaryConditions(ParameterizedSolidMechanics& solid_solver)
 {
   FiniteElementState velo = solid_solver.velocity();
   velo                    = initial_interior_velo;
@@ -82,21 +137,24 @@ void applyInitialAndBoundaryConditions(SolidMechanics<p, dim>& solid_solver)
   solid_solver.setDisplacement(disp);
 }
 
-std::unique_ptr<SolidMechanics<p, dim>> createNonlinearSolidMechanicsSolver(
-    const NonlinearSolverOptions& nonlinear_opts, const TimesteppingOptions& dyn_opts, const SolidMaterial& mat)
+auto
+createNonlinearSolidMechanicsSolver(const NonlinearSolverOptions& nonlinear_opts, const TimesteppingOptions& dyn_opts, const SolidMaterial& mat)
 {
   static int iter = 0;
   auto       solid =
-      std::make_unique<SolidMechanics<p, dim>>(nonlinear_opts, solid_mechanics::direct_linear_options, dyn_opts,
-                                               geoNonlinear, physics_prefix + std::to_string(iter++), mesh_tag);
-  solid->setMaterial(mat);
+      std::make_unique<ParameterizedSolidMechanics>(nonlinear_opts, solid_mechanics::direct_linear_options, dyn_opts,
+        geoNonlinear, physics_prefix + std::to_string(iter++), mesh_tag, std::vector<::std::string> {"YoungsModulus", "PoissonsRatio"});
+  solid->setMaterial(DependsOn<0, 1>{}, mat);
   solid->setDisplacementBCs({1}, [](const mfem::Vector&, mfem::Vector& disp) { disp = boundary_disp; });
-  solid->addBodyForce([](auto X, auto t) {
-    auto Y = X;
-    Y[0]   = 0.1 + 0.1 * X[0] + 0.3 * X[1] - 0.2 * t;
-    Y[1]   = -0.05 - 0.08 * X[0] + 0.15 * X[1] + 0.3 * t;
-    return 0.1 * X + Y;
-  });
+
+  FiniteElementState YoungsModulusState(solid->parameter(solid->parameterNames()[0]));
+  YoungsModulusState = youngs_modulus;
+  solid->setParameter(0, YoungsModulusState);
+
+  FiniteElementState PoissonsRatioState(solid->parameter(solid->parameterNames()[1]));
+  PoissonsRatioState = poisson_ratio;
+  solid->setParameter(1, PoissonsRatioState);
+
   solid->completeSetup();
 
   applyInitialAndBoundaryConditions(*solid);
@@ -166,7 +224,7 @@ std::tuple<double, FiniteElementDual, FiniteElementDual, FiniteElementDual> comp
   return std::make_tuple(qoi, initial_displacement_sensitivity, initial_velocity_sensitivity, shape_sensitivity);
 }
 
-double computeSolidMechanicsQoiAdjustingShape(SolidMechanics<p, dim>& solid_solver, const TimeSteppingInfo& ts_info,
+double computeSolidMechanicsQoiAdjustingShape(ParameterizedSolidMechanics& solid_solver, const TimeSteppingInfo& ts_info,
                                               const FiniteElementState& shape_derivative_direction, double pertubation)
 {
   FiniteElementState shape_disp(StateManager::mesh(mesh_tag), H1<SHAPE_ORDER, dim>{}, "input_shape_displacement");
@@ -179,7 +237,7 @@ double computeSolidMechanicsQoiAdjustingShape(SolidMechanics<p, dim>& solid_solv
   return computeSolidMechanicsQoi(solid_solver, ts_info);
 }
 
-double computeSolidMechanicsQoiAdjustingInitialDisplacement(SolidMechanics<p, dim>&   solid_solver,
+double computeSolidMechanicsQoiAdjustingInitialDisplacement(ParameterizedSolidMechanics&   solid_solver,
                                                             const TimeSteppingInfo&   ts_info,
                                                             const FiniteElementState& derivative_direction,
                                                             double                    pertubation)
@@ -194,7 +252,7 @@ double computeSolidMechanicsQoiAdjustingInitialDisplacement(SolidMechanics<p, di
   return computeSolidMechanicsQoi(solid_solver, ts_info);
 }
 
-double computeSolidMechanicsQoiAdjustingInitialVelocity(SolidMechanics<p, dim>&   solid_solver,
+double computeSolidMechanicsQoiAdjustingInitialVelocity(ParameterizedSolidMechanics&   solid_solver,
                                                         const TimeSteppingInfo&   ts_info,
                                                         const FiniteElementState& derivative_direction,
                                                         double                    pertubation)
@@ -217,8 +275,6 @@ struct SolidMechanicsSensitivityFixture : public ::testing::Test {
     std::string filename = std::string(SERAC_REPO_DIR) + "/data/meshes/star.mesh";
     mesh                 = &StateManager::setMesh(mesh::refineAndDistribute(buildMeshFromFile(filename), 0), mesh_tag);
     mat.density          = 1.0;
-    mat.K                = 1.0;
-    mat.G                = 0.1;
   }
 
   void fillDirection(FiniteElementState& direction) const
