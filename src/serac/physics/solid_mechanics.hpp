@@ -451,6 +451,15 @@ public:
     bcs_.addEssential(disp_bdr, disp_bdr_coef_, displacement_.space());
   }
 
+  // version for transient on single component
+  void setDisplacementBCs(const std::set<int>& disp_bdr,
+                          std::function<double(const mfem::Vector& x, double t)> disp, int component)
+  {
+    component_disp_bdr_coef_ = std::make_shared<mfem::FunctionCoefficient>(disp);
+
+    bcs_.addEssential(disp_bdr, component_disp_bdr_coef_, displacement_.space(), component);
+  }
+
   /**
    * @brief Set essential displacement boundary conditions (strongly enforced)
    *
